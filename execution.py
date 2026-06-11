@@ -119,7 +119,9 @@ class ExecutionLayer:
         }
         
         if price is not None:
-            payload["price"] = price
+            # The API always expects normalized price [0.01, 0.99]
+            multiplier = 100.0 if currency == "NGN" else 1.0
+            payload["price"] = price / multiplier
         if max_slippage is not None:
             payload["maxSlippage"] = max_slippage
         if post_only:
@@ -204,14 +206,19 @@ class ExecutionLayer:
                 continue
                 
             side = order["side"]
+            currency = order.get("currency", "NGN")
+            multiplier = 100.0 if currency == "NGN" else 1.0
+            
+            scaled_bid = best_bid * multiplier if best_bid is not None else None
+            scaled_ask = best_ask * multiplier if best_ask is not None else None
             
             # Intersection rules for simulated fills
             # BUY order: fill if best ask is <= our buy limit price (we can buy from sellers)
             # SELL order: fill if best bid is >= our sell limit price (we can sell to buyers)
             fill = False
-            if side == "BUY" and best_ask is not None and best_ask <= price:
+            if side == "BUY" and scaled_ask is not None and scaled_ask <= price:
                 fill = True
-            elif side == "SELL" and best_bid is not None and best_bid >= price:
+            elif side == "SELL" and scaled_bid is not None and scaled_bid >= price:
                 fill = True
                 
             if fill:

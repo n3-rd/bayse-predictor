@@ -30,5 +30,26 @@ class TestBayseBot(unittest.TestCase):
         sig = generate_signature(secret_key, method, path, timestamp, "")
         self.assertIsNotNone(sig)
 
+    def test_extract_asset_symbol(self):
+        from price_feed import extract_asset_symbol
+        self.assertEqual(extract_asset_symbol({"assetSymbolPair": "BTCUSDT"}), "BTCUSDT")
+        self.assertEqual(extract_asset_symbol({"title": "Bitcoin Up or Down - 15 minutes?", "category": "CRYPTO"}), "BTC")
+        self.assertEqual(extract_asset_symbol({"slug": "sol-price-prediction", "category": "CRYPTO"}), "SOL")
+        self.assertEqual(extract_asset_symbol({"title": "Who will win the election?", "category": "POLITICS"}), None)
+
+    def test_estimate_binary_probability(self):
+        from price_feed import estimate_binary_probability
+        # At the threshold, probability should be around 50%
+        prob = estimate_binary_probability(current_price=100.0, threshold=100.0, time_remaining_seconds=3600.0, volatility=0.50)
+        self.assertAlmostEqual(prob, 0.5, places=1)
+        
+        # Well above threshold, probability should be high
+        prob_high = estimate_binary_probability(current_price=120.0, threshold=100.0, time_remaining_seconds=3600.0, volatility=0.50)
+        self.assertTrue(prob_high > 0.8)
+        
+        # Well below threshold, probability should be low
+        prob_low = estimate_binary_probability(current_price=80.0, threshold=100.0, time_remaining_seconds=3600.0, volatility=0.50)
+        self.assertTrue(prob_low < 0.2)
+
 if __name__ == "__main__":
     unittest.main()

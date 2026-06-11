@@ -32,8 +32,30 @@ class RiskMeter:
             
         logger.info(f"RiskMeter active. Starting daily equity baseline: {self.starting_daily_equity}")
 
+    async def has_minimum_trading_balance(self) -> bool:
+        """
+        Quickly verifies if the wallet has the absolute minimum balance required to place any trade.
+        Avoids running strategy thinking when there is no spendable capital.
+        """
+        if self.exec_layer.dry_run:
+            return True
+        try:
+            assets_data = await self.exec_layer.request("GET", "/v1/wallet/assets", authenticated=True)
+            for asset in assets_data.get("assets", []):
+                currency = (asset.get("symbol") or asset.get("currency", "")).upper()
+                available = float(asset.get("availableBalance", asset.get("available", 0.0)))
+                # Minimum limit is 100 NGN or 1.00 USD
+                if currency == "NGN" and available >= 100.0:
+                    return True
+                elif currency == "USD" and available >= 1.0:
+                    return True
+            return False
+        except Exception as e:
+            logger.warning(f"Error checking minimum trading balance: {e}")
+            return True # Fallback to True to prevent lockup
+
     async def audit_order(self, event_id: str, market_id: str, outcome_id: str, side: str, 
-                          amount: float, price: float, order_type: str = "LIMIT") -> tuple[bool, float]:
+                          amount: float, price: float, order_type: str = "LIMIT", currency: str = "NGN") -> tuple[bool, float]:
         """
         Audits order specifications against size limits, slippage limit, and daily loss limits.
         Returns (is_approved, modified_amount).
@@ -83,29 +105,48 @@ class RiskMeter:
 
         # 3. Liquidity Filtering & Slippage Check
         book = self.observer.orderbooks.get(market_id)
-        if book and order_type.upper() == "LIMIT":
-            # Simulate execution to check price slippage
-            side_key = "asks" if side.upper() == "BUY" else "bids"
-            resting_orders = sorted(book[side_key].items(), key=lambda x: x[0], reverse=(side_key == "bids"))
+        if book:
+            multiplier = 100.0 if currency.upper() == "NGN" else 1.0
             
-            accumulated_size = 0.0
-            average_price = 0.0
-            needed_shares = audited_amount / price
+            # Calculate total resting liquidity on both sides in shares
+            total_bids = sum(book["bids"].values())
+            total_asks = sum(book["asks"].values())
+            total_liquidity = total_bids + total_asks
             
-            for rest_price, rest_size in resting_orders:
-                take_size = min(rest_size, needed_shares - accumulated_size)
-                average_price += take_size * rest_price
-                accumulated_size += take_size
-                if accumulated_size >= needed_shares:
-                    break
-                    
-            if accumulated_size > 0:
-                avg_execution_price = average_price / accumulated_size
-                slippage = abs(avg_execution_price - price) / price
-                if slippage > config.DEFAULT_SLIPPAGE:
-                    logger.error(f"Order rejected: Simulated slippage of {slippage:.2%} exceeds limit of {config.DEFAULT_SLIPPAGE:.2%}")
-                    return False, 0.0
-                    
+            # Scale to actual monetary value (e.g. 1 share represents up to 100 NGN)
+            total_liquidity_value = total_liquidity * multiplier
+            
+            # Liquidity limit depends on currency
+            min_liquidity = 50000.0 if currency.upper() == "NGN" else 500.0
+            
+            if total_liquidity_value < min_liquidity:
+                logger.error(f"Order rejected: Market is too illiquid. Total resting volume: {total_liquidity_value:.2f} {currency} (required: {min_liquidity} {currency})")
+                return False, 0.0
+
+            if order_type.upper() == "LIMIT":
+                # Simulate execution to check price slippage
+                side_key = "asks" if side.upper() == "BUY" else "bids"
+                resting_orders = sorted(book[side_key].items(), key=lambda x: x[0], reverse=(side_key == "bids"))
+                
+                accumulated_size = 0.0
+                average_price = 0.0
+                needed_shares = audited_amount / price
+                
+                for rest_price, rest_size in resting_orders:
+                    take_size = min(rest_size, needed_shares - accumulated_size)
+                    average_price += take_size * rest_price
+                    accumulated_size += take_size
+                    if accumulated_size >= needed_shares:
+                        break
+                        
+                if accumulated_size > 0:
+                    avg_execution_price = average_price / accumulated_size
+                    # Normalize input price to match order book scale
+                    norm_price = price / multiplier
+                    slippage = abs(avg_execution_price - norm_price) / norm_price
+                    if slippage > config.DEFAULT_SLIPPAGE:
+                        logger.error(f"Order rejected: Simulated slippage of {slippage:.2%} exceeds limit of {config.DEFAULT_SLIPPAGE:.2%}")
+                        return False, 0.0
         return True, audited_amount
 
     async def check_daily_loss_limit(self):

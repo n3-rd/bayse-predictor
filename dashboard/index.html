@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bayse Predictor Bot Dashboard</title>
+    <link rel="stylesheet" href="styles.css">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="dashboard-header glass-card">
+            <div class="header-logo">
+                <span class="logo-badge">LIVE</span>
+                <h1>Bayse Predictor</h1>
+            </div>
+            <div class="status-indicator-group">
+                <span id="dry-run-badge" class="badge secondary">DRY RUN</span>
+                <span id="kill-switch-badge" class="badge success">RISK CONTROLS OK</span>
+                <div class="connection-status">
+                    <span class="status-dot online"></span>
+                    <span id="server-time">UTC --:--:--</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Metric Grid -->
+        <section class="metrics-grid">
+            <div class="metric-card glass-card">
+                <div class="metric-icon money-icon"></div>
+                <div class="metric-content">
+                    <h3>Available Balance</h3>
+                    <h2 id="avail-balance">-- NGN</h2>
+                    <p id="total-equity">Starting Baseline: -- NGN</p>
+                </div>
+            </div>
+            <div class="metric-card glass-card">
+                <div class="metric-icon risk-icon"></div>
+                <div class="metric-content">
+                    <h3>Risk Management</h3>
+                    <h2 id="daily-pnl">-- NGN</h2>
+                    <p id="pnl-pct">Daily P&L: --% (Limit: 5%)</p>
+                </div>
+            </div>
+            <div class="metric-card glass-card">
+                <div class="metric-icon chart-icon"></div>
+                <div class="metric-content">
+                    <h3>Markets Active</h3>
+                    <h2 id="active-markets-count">0</h2>
+                    <p id="active-positions-count">-- Positions Held</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Main Workspace Grid -->
+        <div class="workspace-grid">
+            <!-- Left Side: Active Evaluations -->
+            <section class="workspace-left glass-card">
+                <div class="section-header">
+                    <h2>Live Market Valuations</h2>
+                    <span class="pulse-icon"></span>
+                </div>
+                <div class="table-container">
+                    <table class="market-table">
+                        <thead>
+                            <tr>
+                                <th>Market Title</th>
+                                <th>Symbol</th>
+                                <th>Current / Threshold</th>
+                                <th>True Prob</th>
+                                <th>Ask / Bid</th>
+                                <th>YES Edge</th>
+                                <th>NO Edge</th>
+                            </tr>
+                        </thead>
+                        <tbody id="market-evals-body">
+                            <tr>
+                                <td colspan="7" class="empty-row">Scanning active prediction markets...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <!-- Right Side: Chart -->
+            <section class="workspace-right glass-card">
+                <div class="section-header">
+                    <h2>Capital Analytics</h2>
+                </div>
+                <div class="chart-container">
+                    <canvas id="balanceChart"></canvas>
+                </div>
+            </section>
+        </div>
+
+        <!-- Live Terminal logs -->
+        <section class="terminal-card glass-card">
+            <div class="section-header">
+                <h2>Live Bot Logging Terminal</h2>
+                <div class="terminal-actions">
+                    <span class="log-indicator"></span>
+                    <button id="clear-logs-btn" class="btn text-btn">Clear Logs</button>
+                </div>
+            </div>
+            <div class="terminal-console" id="log-console">
+                <div class="terminal-line system-line">[SYSTEM] Terminal initialized. Waiting for bot events...</div>
+            </div>
+        </section>
+    </div>
+    <script src="app.js"></script>
+</body>
+</html>

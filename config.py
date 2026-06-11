@@ -34,3 +34,7 @@ DAILY_LOSS_LIMIT_PCT = 0.05   # Global daily loss limit of 5%
 # Strategy settings
 MIN_EDGE_PCT = 0.05  # minimum probability deviation to trigger an order (e.g. 5%)
 DEFAULT_SLIPPAGE = 0.02  # 2% max slippage boundary
+
+# Dashboard Settings
+ENABLE_DASHBOARD = os.getenv("ENABLE_DASHBOARD", "True").lower() in ("true", "1", "yes")
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "8080"))

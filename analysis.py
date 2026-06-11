@@ -10,9 +10,10 @@ class ProbabilityDeviationStrategy:
 
     def generate_signals(self, event_id: str, market_id: str, outcome_yes_id: str, outcome_no_id: str,
                          true_probability: float, best_bid: Optional[float], best_ask: Optional[float], 
-                         currency: str = "NGN") -> List[Dict[str, Any]]:
+                         currency: str = "NGN", portfolio_balance: float = 10000.0) -> List[Dict[str, Any]]:
         """
-        Calculates mathematical edge against current market quotes.
+        Calculates mathematical edge against current market quotes and uses the Kelly Criterion
+        (Quarter-Kelly) for dynamic position sizing based on edge strength and portfolio balance.
         Returns a list of proposed trade signals.
         """
         signals = []
@@ -35,28 +36,50 @@ class ProbabilityDeviationStrategy:
 
         logger.debug(f"True Prob: {true_probability:.2f}, Market Bid/Ask: {norm_bid:.2f}/{norm_ask:.2f}, YES Edge: {yes_edge:.2%}, NO Edge: {no_edge:.2%}")
 
+        # Fractional Kelly sizing parameter (e.g. Quarter-Kelly to scale down risk)
+        fractional_kelly = 0.25
+
         if yes_edge >= self.min_edge:
+            # Kelly fraction: f* = (p - P) / (1 - P)
+            kelly_fraction = yes_edge / (1.0 - norm_ask + 1e-5)
+            # Size = portfolio_balance * Kelly_fraction * fractional_kelly
+            trade_fraction = max(0.0, min(kelly_fraction * fractional_kelly, 0.02))
+            amount = portfolio_balance * trade_fraction * multiplier
+            
+            # Ensure at least exchange minimum
+            amount = max(amount, 100.0 if currency == "NGN" else 1.0)
+            
             signals.append({
                 "eventId": event_id,
                 "marketId": market_id,
                 "outcomeId": outcome_yes_id,
                 "side": "BUY",
                 "price": best_ask,  # Cross spread to hit the ask
-                "amount": 2000.0,   # raw size (RiskMeter will truncate if necessary)
+                "amount": amount,
                 "type": "LIMIT",
-                "reason": f"YES undervalued: True prob {true_probability:.2f} > market ask {norm_ask:.2f}"
+                "reason": f"YES undervalued: True prob {true_probability:.2f} > market ask {norm_ask:.2f} (Edge: {yes_edge:+.2%}, Kelly Size: {amount:.2f} {currency})"
             })
         elif no_edge >= self.min_edge:
             # Undervalued NO (or overvalued YES)
+            no_price = 1.0 - norm_bid
+            no_prob = 1.0 - true_probability
+            
+            # Kelly fraction: f* = (p - P) / (1 - P)
+            kelly_fraction = no_edge / (1.0 - no_price + 1e-5)
+            trade_fraction = max(0.0, min(kelly_fraction * fractional_kelly, 0.02))
+            amount = portfolio_balance * trade_fraction * multiplier
+            
+            amount = max(amount, 100.0 if currency == "NGN" else 1.0)
+            
             signals.append({
                 "eventId": event_id,
                 "marketId": market_id,
                 "outcomeId": outcome_no_id,
                 "side": "BUY",
-                "price": (1.0 - norm_bid) * multiplier,  # Buying NO costs (1 - YES_bid)
-                "amount": 2000.0,
+                "price": no_price * multiplier,  # Buying NO costs (1 - YES_bid)
+                "amount": amount,
                 "type": "LIMIT",
-                "reason": f"NO undervalued: True prob {1.0 - true_probability:.2f} > market ask {1.0 - norm_bid:.2f}"
+                "reason": f"NO undervalued: True prob {no_prob:.2f} > market ask {no_price:.2f} (Edge: {no_edge:+.2%}, Kelly Size: {amount:.2f} {currency})"
             })
 
         return signals
