@@ -72,10 +72,39 @@ def estimate_binary_probability(current_price: float, threshold: float, time_rem
         return 0.5
 
 class PriceFeedClient:
-    def __init__(self, cache_ttl_seconds: float = 60.0):
+    def __init__(self, cache_ttl_seconds: float = 60.0, ml_predictor=None, db_manager=None):
         self.cache_ttl = cache_ttl_seconds
         self.price_cache: Dict[str, tuple[float, float]] = {}  # symbol -> (price, timestamp)
         self.session: Optional[aiohttp.ClientSession] = None
+        self.ml_predictor = ml_predictor
+        self.db_manager = db_manager
+
+    async def estimate_probability(self, symbol: str, current_price: float, threshold: float, 
+                                   time_remaining_seconds: float, volatility: float = 0.50) -> tuple[float, str]:
+        """
+        Estimates the probability using the ML model if trained and the symbol is Bitcoin.
+        Otherwise, falls back to the mathematical Black-Scholes variation.
+        Returns a tuple of (probability, model_name).
+        """
+        sym = symbol.upper()
+        if sym in ["BTC", "BTCUSDT", "BTCUSD"] and self.ml_predictor and self.ml_predictor.is_trained:
+            try:
+                # Fetch recent prices from the evaluations logged in the DB
+                recent_evals = await self.db_manager.fetch_recent_evaluations(sym, limit=20)
+                recent_prices = [float(e["spot_price"]) for e in recent_evals]
+                # Reverse to keep chronological order (fetch_recent_evaluations returns DESC)
+                recent_prices.reverse()
+                
+                # Predict using ML model
+                prob = self.ml_predictor.predict_probability(current_price, threshold, time_remaining_seconds, recent_prices)
+                model_name = type(self.ml_predictor.model).__name__
+                return prob, f"ML ({model_name})"
+            except Exception as e:
+                logger.error(f"Failed to estimate probability using ML model: {e}. Falling back to Black-Scholes.")
+                
+        # Fallback to Black-Scholes mathematical CDF
+        prob = estimate_binary_probability(current_price, threshold, time_remaining_seconds, volatility)
+        return prob, "Black-Scholes (Normal CDF)"
 
     async def get_price(self, asset_symbol: str) -> Optional[float]:
         symbol = asset_symbol.upper().replace("/", "").replace("-", "")

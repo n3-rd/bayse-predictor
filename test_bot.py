@@ -51,5 +51,66 @@ class TestBayseBot(unittest.TestCase):
         prob_low = estimate_binary_probability(current_price=80.0, threshold=100.0, time_remaining_seconds=3600.0, volatility=0.50)
         self.assertTrue(prob_low < 0.2)
 
+    def test_bitcoin_category_filtering(self):
+        # Test that _discover_active_markets properly filters out non-crypto and non-BTC events
+        from main import BaysePredictorBot
+        import asyncio
+        
+        bot = BaysePredictorBot()
+        # Mock request method
+        async def mock_request(*args, **kwargs):
+            return {
+                "events": [
+                    {
+                        "id": "event-1",
+                        "category": "finance",
+                        "title": "USD/NGN Exchange Rate",
+                        "closingDate": "2026-06-12T14:34:47Z",
+                        "markets": [{"id": "market-1", "outcome1Label": "YES", "outcome1Id": "yes-1", "outcome2Label": "NO", "outcome2Id": "no-1"}]
+                    },
+                    {
+                        "id": "event-2",
+                        "category": "crypto",
+                        "title": "Ethereum closing price",
+                        "slug": "eth-price-prediction",
+                        "closingDate": "2026-06-12T14:34:47Z",
+                        "markets": [{"id": "market-2", "outcome1Label": "YES", "outcome1Id": "yes-2", "outcome2Label": "NO", "outcome2Id": "no-2"}]
+                    },
+                    {
+                        "id": "event-3",
+                        "category": "crypto",
+                        "title": "Bitcoin closing price",
+                        "slug": "btc-price-prediction",
+                        "closingDate": "2026-06-12T14:34:47Z",
+                        "markets": [{"id": "market-3", "outcome1Label": "YES", "outcome1Id": "yes-3", "outcome2Label": "NO", "outcome2Id": "no-3"}]
+                    }
+                ]
+            }
+        bot.exec_layer.request = mock_request
+        
+        discovered = asyncio.run(bot._discover_active_markets())
+        self.assertEqual(len(discovered), 1)
+        self.assertEqual(discovered[0]["eventId"], "event-3")
+        self.assertEqual(discovered[0]["marketId"], "market-3")
+
+    def test_ml_predictor_cold_start_fallback(self):
+        # Verify that if the ML predictor is not trained, it falls back to Black-Scholes math formula
+        from main import BaysePredictorBot
+        import asyncio
+        
+        bot = BaysePredictorBot()
+        self.assertFalse(bot.ml.is_trained)
+        
+        # Call estimate_probability on PriceFeedClient
+        prob, model = asyncio.run(bot.price_feed.estimate_probability(
+            symbol="BTC",
+            current_price=65000.0,
+            threshold=65000.0,
+            time_remaining_seconds=3600.0,
+            volatility=0.50
+        ))
+        self.assertEqual(model, "Black-Scholes (Normal CDF)")
+        self.assertAlmostEqual(prob, 0.5, places=1)
+
 if __name__ == "__main__":
     unittest.main()

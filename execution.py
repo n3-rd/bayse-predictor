@@ -15,6 +15,7 @@ class ExecutionLayer:
         self.secret_key = secret_key
         self.dry_run = dry_run
         self.session: Optional[aiohttp.ClientSession] = None
+        self.observer: Optional[Any] = None
         
         # Track simulated (dry run) orders
         # key: order_id -> val: dict representing order
@@ -143,8 +144,19 @@ class ExecutionLayer:
                 "timestamp": time.time(),
                 "currency": currency
             }
-            self.dry_run_orders[sim_order_id] = sim_order
-            logger.info(f"[DRY RUN] Order Created: {sim_order}")
+            
+            if market_id.startswith("sim-") or order_type.upper() == "MARKET":
+                sim_order["status"] = "FILLED"
+                self.dry_run_orders[sim_order_id] = sim_order
+                logger.info(f"[DRY RUN] Order Created and Filled Instantly: {sim_order}")
+                if self.observer is not None:
+                    shares = amount / price if price else 0.0
+                    self.observer.positions[outcome_id] = self.observer.positions.get(outcome_id, 0.0) + shares
+                    logger.info(f"[DRY RUN POSITION UPDATE] Added {shares:.2f} shares for outcome {outcome_id}. New balance: {self.observer.positions[outcome_id]:.2f}")
+            else:
+                self.dry_run_orders[sim_order_id] = sim_order
+                logger.info(f"[DRY RUN] Order Created: {sim_order}")
+                
             return {"status": "success", "orderId": sim_order_id, "order": sim_order}
         else:
             return await self.request("POST", path, data=payload, authenticated=True)
@@ -224,3 +236,11 @@ class ExecutionLayer:
             if fill:
                 order["status"] = "FILLED"
                 logger.info(f"[DRY RUN FILL ALERT] Order {order_id} filled: {order['side']} @ {price}")
+                
+                # Update observer positions in dry run mode to keep inventory tracking accurate
+                if self.observer is not None:
+                    outcome_id = order["outcomeId"]
+                    amount = order["amount"]
+                    shares = amount / price if price else 0.0
+                    self.observer.positions[outcome_id] = self.observer.positions.get(outcome_id, 0.0) + shares
+                    logger.info(f"[DRY RUN POSITION UPDATE] Added {shares:.2f} shares for outcome {outcome_id}. New balance: {self.observer.positions[outcome_id]:.2f}")

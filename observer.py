@@ -18,6 +18,7 @@ class MarketObserver:
         self.orderbooks: Dict[str, Dict[str, Any]] = {}  # marketId -> {"bids": {price: size}, "asks": {price: size}, "seq": int}
         self.portfolio: Dict[str, Any] = {}             # portfolio state
         self.positions: Dict[str, float] = {}           # outcomeId -> net shares balance
+        self.open_orders: Dict[str, Dict[str, Any]] = {} # orderId -> order
         
         self.is_connected = False
         self.message_queue = asyncio.Queue()
@@ -117,7 +118,7 @@ class MarketObserver:
 
     async def _sync_state(self):
         """
-        Performs the state synchronization protocol for portfolio and positions.
+        Performs the state synchronization protocol for portfolio, positions, and open orders.
         """
         if self.is_synchronizing:
             return
@@ -134,6 +135,19 @@ class MarketObserver:
                     self.positions[pos["outcomeId"]] = float(pos.get("balance", 0.0))
             except Exception as e:
                 logger.warning(f"Failed to fetch portfolio during sync: {e}. Starting with empty positions.")
+                
+            # Fetch open orders
+            try:
+                orders_data = await self.exec_layer.request("GET", "/v1/pm/orders", authenticated=True)
+                orders_list = orders_data if isinstance(orders_data, list) else orders_data.get("orders", [])
+                self.open_orders.clear()
+                for o in orders_list:
+                    status = o.get("status", "OPEN").upper()
+                    if status in ("OPEN", "PARTIAL", "PARTIALLY_FILLED"):
+                        self.open_orders[o["id"]] = o
+                logger.info(f"Synchronized {len(self.open_orders)} open orders.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch open orders during sync: {e}.")
                 
             logger.info("State Synchronization complete. Ready to process WebSocket stream.")
         finally:
@@ -194,6 +208,15 @@ class MarketObserver:
                     balance_change = float(msg.get("filledQtyDelta", 0.0))
                     if outcome_id:
                         self.positions[outcome_id] = self.positions.get(outcome_id, 0.0) + balance_change
+                    
+                    # Update open_orders dict
+                    order_id = msg.get("id") or msg.get("orderId")
+                    if order_id:
+                        status = msg.get("status", "").upper()
+                        if status in ("FILLED", "CANCELLED", "REJECTED", "EXPIRED"):
+                            self.open_orders.pop(order_id, None)
+                        else:
+                            self.open_orders[order_id] = msg
                 elif event_type == "ticker":
                     # Apply ticker prices if necessary
                     pass

@@ -13,6 +13,8 @@ from risk import RiskMeter
 from analysis import ProbabilityDeviationStrategy
 from price_feed import PriceFeedClient, extract_asset_symbol, estimate_binary_probability, parse_iso_datetime
 from server import DashboardServer
+from database import DatabaseManager
+from ml_predictor import BitcoinMLPredictor
 
 class DequeLogHandler(logging.Handler):
     def __init__(self, maxlen=100):
@@ -45,9 +47,13 @@ class BaysePredictorBot:
     def __init__(self):
         self.exec_layer = ExecutionLayer(BAYSE_PUBLIC_KEY, BAYSE_SECRET_KEY, dry_run=DRY_RUN)
         self.observer = MarketObserver(self.exec_layer, BAYSE_PUBLIC_KEY)
+        self.exec_layer.observer = self.observer  # Enable dry run position updates
         self.risk_meter = RiskMeter(self.exec_layer, self.observer)
         self.strategy = ProbabilityDeviationStrategy()
-        self.price_feed = PriceFeedClient()
+        
+        self.db = DatabaseManager()
+        self.ml = BitcoinMLPredictor()
+        self.price_feed = PriceFeedClient(ml_predictor=self.ml, db_manager=self.db)
         
         self.dashboard = None
         if config.ENABLE_DASHBOARD:
@@ -60,6 +66,9 @@ class BaysePredictorBot:
     async def start(self):
         logger.info("Starting Bayse Predictor Bot...")
         self.is_running = True
+        
+        # Initialize Database Manager
+        await self.db.initialize()
         
         # 1. Initialize Execution Layer
         await self.exec_layer.initialize()
@@ -77,6 +86,8 @@ class BaysePredictorBot:
         # 5. Schedule loops
         self.tasks.append(asyncio.create_task(self._strategy_loop()))
         self.tasks.append(asyncio.create_task(self._risk_neutralizer_loop()))
+        self.tasks.append(asyncio.create_task(self._database_resolver_loop()))
+        self.tasks.append(asyncio.create_task(self._ml_retraining_loop()))
         
         logger.info("All services started and running.")
 
@@ -98,6 +109,9 @@ class BaysePredictorBot:
         # Close connection pool
         await self.exec_layer.close()
         
+        # Close database pool
+        await self.db.close()
+        
         # Close price feed
         await self.price_feed.close()
         logger.info("Bot stopped successfully.")
@@ -110,12 +124,18 @@ class BaysePredictorBot:
         """
         try:
             # Hit REST API for active events, limiting to a larger page size to filter
-            events_data = await self.exec_layer.request("GET", "/v1/pm/events?page=1&size=20")
+            events_data = await self.exec_layer.request("GET", "/v1/pm/events?page=1&size=100")
             discovered = []
             for event in events_data.get("events", []):
-                # 1. Category check (only crypto, fx, finance)
+                # 1. Category check (strictly crypto category)
                 category = event.get("category", "").lower()
-                if category not in ["crypto", "fx", "finance"]:
+                if category != "crypto":
+                    continue
+                
+                # Force strictly Bitcoin markets
+                symbol = extract_asset_symbol(event)
+                normalized_symbol = symbol.upper().replace("/", "").replace("-", "") if symbol else ""
+                if normalized_symbol not in ["BTC", "BTCUSDT", "BTCUSD"]:
                     continue
                 
                 # 2. Date check (skip if resolution/closing is > 7 days out or not parseable)
@@ -201,6 +221,18 @@ class BaysePredictorBot:
                     await asyncio.sleep(15)
                     continue
 
+                # Query wallet assets once before the loop to size Kelly portfolio balance smartly
+                available_balances = {}
+                try:
+                    if not self.exec_layer.dry_run:
+                        assets_data = await self.exec_layer.request("GET", "/v1/wallet/assets", authenticated=True)
+                        for asset in assets_data.get("assets", []):
+                            cur = (asset.get("symbol") or asset.get("currency", "")).upper()
+                            val = float(asset.get("availableBalance", asset.get("available", 0.0)))
+                            available_balances[cur] = val
+                except Exception as e:
+                    logger.debug(f"Could not retrieve dynamic wallet balances: {e}")
+
                 markets = await self._discover_active_markets()
                 self.latest_evaluations.clear()
                 for m in markets:
@@ -217,6 +249,8 @@ class BaysePredictorBot:
                     if m.get("supportedCurrencies") and "NGN" not in m.get("supportedCurrencies"):
                         currency = m.get("supportedCurrencies")[0]
                     multiplier = 100.0 if currency == "NGN" else 1.0
+
+                    smart_balance = available_balances.get(currency.upper(), self.risk_meter.starting_daily_equity)
 
                     # Check current order book
                     best_bid, best_ask = self.observer.get_best_bid_ask(target_market_id)
@@ -240,6 +274,7 @@ class BaysePredictorBot:
                         current_price = 0.0
                         remaining_seconds = 0.0
                         threshold = 0.0
+                        ml_model_used = "Black-Scholes (Normal CDF)"
                     else:
                         symbol = extract_asset_symbol(m)
                         if not symbol:
@@ -277,7 +312,9 @@ class BaysePredictorBot:
                         elif symbol in ["USDNGN", "NGN", "USD/NGN", "EURUSD", "GBPUSD"]:
                             volatility = 0.15
                             
-                        true_probability = estimate_binary_probability(
+                        # Use estimate_probability which selects ML model if available
+                        true_probability, ml_model_used = await self.price_feed.estimate_probability(
+                            symbol=symbol,
                             current_price=current_price,
                             threshold=threshold,
                             time_remaining_seconds=remaining_seconds,
@@ -294,8 +331,22 @@ class BaysePredictorBot:
                         f"Evaluating {m.get('title')} ({symbol}): "
                         f"Price={current_price}, Threshold={threshold}, T={remaining_seconds/3600:.2f}h | "
                         f"True Prob={true_probability:.2%}, Market Ask={norm_ask:.2%}, Bid={norm_bid:.2%} | "
-                        f"Edge (YES/NO): {yes_edge:+.2%} / {no_edge:+.2%} (Min Edge: {self.strategy.min_edge:.2%})"
+                        f"Edge (YES/NO): {yes_edge:+.2%} / {no_edge:+.2%} (Min Edge: {self.strategy.min_edge:.2%}) | "
+                        f"Model={ml_model_used}"
                     )
+
+                    # Log evaluation to PostgreSQL database
+                    if not target_market_id.startswith("sim-"):
+                        await self.db.log_evaluation(
+                            market_id=target_market_id,
+                            asset=symbol,
+                            spot_price=current_price,
+                            threshold=threshold,
+                            predicted_probability=true_probability,
+                            best_bid=norm_bid,
+                            best_ask=norm_ask,
+                            time_remaining=remaining_seconds
+                        )
 
                     # Store evaluation metrics for dashboard
                     self.latest_evaluations[target_market_id] = {
@@ -308,7 +359,8 @@ class BaysePredictorBot:
                         "bid": norm_bid,
                         "yes_edge": yes_edge,
                         "no_edge": no_edge,
-                        "timestamp": time.time()
+                        "timestamp": time.time(),
+                        "model_used": ml_model_used
                     }
 
                     signals = self.strategy.generate_signals(
@@ -320,10 +372,28 @@ class BaysePredictorBot:
                         best_bid=best_bid_scaled,
                         best_ask=best_ask_scaled,
                         currency=currency,
-                        portfolio_balance=self.risk_meter.starting_daily_equity
+                        portfolio_balance=smart_balance
                     )
                     
                     for sig in signals:
+                        outcome_id = sig["outcomeId"]
+                        
+                        # PREVENT BALANCE DRAIN: Check if we already hold a position here
+                        current_position = self.observer.positions.get(outcome_id, 0.0)
+                        if current_position > 0:
+                            logger.info(f"Skipping {sig['side']} for {outcome_id}: Already holding {current_position} shares.")
+                            continue
+
+                        # PREVENT BALANCE DRAIN: Check if we already have an open order for this outcome
+                        if self.exec_layer.dry_run:
+                            has_open_order = any(o.get("outcomeId") == outcome_id and o.get("status") == "OPEN" for o in self.exec_layer.dry_run_orders.values())
+                        else:
+                            has_open_order = any(o.get("outcomeId") == outcome_id for o in self.observer.open_orders.values())
+                            
+                        if has_open_order:
+                            logger.info(f"Skipping {sig['side']} for {outcome_id}: Already have an open order on the book.")
+                            continue
+
                         # Audit through risk filter
                         approved, audited_amount = await self.risk_meter.audit_order(
                             event_id=sig["eventId"],
@@ -337,17 +407,66 @@ class BaysePredictorBot:
                         )
                         
                         if approved:
+                            # Log signal to PostgreSQL database
+                            if not target_market_id.startswith("sim-"):
+                                await self.db.log_signal(
+                                    market_id=sig["marketId"],
+                                    outcome_id=sig["outcomeId"],
+                                    trade_side=sig["side"],
+                                    price=sig["price"],
+                                    amount=audited_amount,
+                                    reason=sig.get("reason", "")
+                                )
+
                             logger.info(f"Signal Approved by RiskMeter. Executing {sig['side']} order...")
-                            await self.exec_layer.create_order(
-                                event_id=sig["eventId"],
-                                market_id=sig["marketId"],
-                                outcome_id=sig["outcomeId"],
-                                side=sig["side"],
-                                amount=audited_amount,
-                                price=sig["price"],
-                                order_type=sig["type"],
-                                currency=currency
-                            )
+                            try:
+                                resp = await self.exec_layer.create_order(
+                                    event_id=sig["eventId"],
+                                    market_id=sig["marketId"],
+                                    outcome_id=sig["outcomeId"],
+                                    side=sig["side"],
+                                    amount=audited_amount,
+                                    price=sig["price"],
+                                    order_type=sig["type"],
+                                    currency=currency
+                                )
+                                
+                                # Optimistically track the open order immediately to prevent race conditions
+                                order_id = resp.get("orderId") or resp.get("id") or resp.get("order", {}).get("id")
+                                if order_id and not self.exec_layer.dry_run:
+                                    self.observer.open_orders[order_id] = {
+                                        "id": order_id,
+                                        "marketId": sig["marketId"],
+                                        "outcomeId": sig["outcomeId"],
+                                        "side": sig["side"],
+                                        "amount": audited_amount,
+                                        "price": sig["price"],
+                                        "status": "OPEN"
+                                    }
+                                
+                                # Log executed trade to PostgreSQL database
+                                if not target_market_id.startswith("sim-"):
+                                    dt_str = m.get("closingDate") or m.get("resolutionDate")
+                                    resolution_time = parse_iso_datetime(dt_str)
+                                    outcome_type = "YES" if sig["outcomeId"] == m["yesId"] else "NO"
+                                    
+                                    await self.db.log_trade(
+                                        market_id=sig["marketId"],
+                                        event_id=sig["eventId"],
+                                        outcome_id=sig["outcomeId"],
+                                        outcome_type=outcome_type,
+                                        asset=symbol,
+                                        trade_side=sig["side"],
+                                        predicted_probability=true_probability,
+                                        execution_price=sig["price"],
+                                        amount=audited_amount,
+                                        currency=currency,
+                                        ml_model_used=ml_model_used,
+                                        resolution_time=resolution_time,
+                                        threshold=threshold
+                                    )
+                            except Exception as e:
+                                logger.error(f"Failed to execute order: {e}")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -355,6 +474,87 @@ class BaysePredictorBot:
                 
             # Sleep interval for evaluation
             await asyncio.sleep(5)
+
+    async def _database_resolver_loop(self):
+        """
+        Periodically checks for unresolved trades in the database and updates their PnL
+        once the resolution date has passed.
+        """
+        while self.is_running:
+            try:
+                unresolved = await self.db.fetch_unresolved_trades()
+                now = datetime.now(timezone.utc)
+                for trade in unresolved:
+                    res_time = trade["resolution_time"]
+                    if not res_time:
+                        continue
+                    if res_time.tzinfo is None:
+                        res_time = res_time.replace(tzinfo=timezone.utc)
+                        
+                    if now > res_time:
+                        # Trade has resolved! Fetch spot price at resolution time from database
+                        query = """
+                            SELECT spot_price FROM evaluations
+                            WHERE asset = $1 AND timestamp >= $2 - interval '2 minutes' AND timestamp <= $2 + interval '2 minutes'
+                            ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - $2))) ASC
+                            LIMIT 1
+                        """
+                        spot_price = None
+                        if self.db.pool:
+                            async with self.db.pool.acquire() as conn:
+                                row = await conn.fetchrow(query, trade["asset"], res_time)
+                                if row:
+                                    spot_price = float(row["spot_price"])
+                                    
+                        if spot_price is None:
+                            # Fallback: get current spot price if database has no entry
+                            spot_price = await self.price_feed.get_price(trade["asset"])
+                            
+                        if spot_price is not None:
+                            threshold = float(trade["threshold"])
+                            outcome_type = trade["outcome_type"]
+                            amount = float(trade["amount"])
+                            price = float(trade["execution_price"])
+                            currency = trade["currency"]
+                            multiplier = 100.0 if currency == "NGN" else 1.0
+                            
+                            # Determine if won
+                            if outcome_type == "YES":
+                                won = (spot_price >= threshold)
+                            else:
+                                won = (spot_price < threshold)
+                                
+                            # Calculate P&L
+                            if won:
+                                shares = amount / price if price else 0.0
+                                pnl = (shares * multiplier) - amount
+                            else:
+                                pnl = -amount
+                                
+                            await self.db.update_trade_resolution(trade["id"], pnl)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in database resolver loop: {e}")
+                
+            await asyncio.sleep(60)
+
+    async def _ml_retraining_loop(self):
+        """
+        Periodically triggers ML model retraining.
+        """
+        while self.is_running:
+            try:
+                # Wait 10 seconds initially for database to initialize/collect data
+                await asyncio.sleep(10)
+                await self.ml.train(self.db)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in ML retraining loop: {e}")
+                
+            # Retrain model every 10 minutes
+            await asyncio.sleep(600)
 
     async def _risk_neutralizer_loop(self):
         """
