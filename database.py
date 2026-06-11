@@ -179,7 +179,7 @@ class DatabaseManager:
             return []
         try:
             query = """
-                SELECT id, market_id, event_id, outcome_id, asset, trade_side, predicted_probability, 
+                SELECT id, market_id, event_id, outcome_id, outcome_type, asset, trade_side, predicted_probability, 
                        execution_price, amount, currency, resolution_time, threshold
                 FROM trades
                 WHERE is_resolved = FALSE

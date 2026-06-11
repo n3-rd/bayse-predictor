@@ -43,3 +43,6 @@ env/
 
 # Project logs
 *.log
+
+#testing
+scratch

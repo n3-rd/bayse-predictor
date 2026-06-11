@@ -55,7 +55,8 @@ class RiskMeter:
             return True # Fallback to True to prevent lockup
 
     async def audit_order(self, event_id: str, market_id: str, outcome_id: str, side: str, 
-                          amount: float, price: float, order_type: str = "LIMIT", currency: str = "NGN") -> tuple[bool, float]:
+                          amount: float, price: float, order_type: str = "LIMIT", currency: str = "NGN",
+                          outcome_yes_id: Optional[str] = None) -> tuple[bool, float]:
         """
         Audits order specifications against size limits, slippage limit, and daily loss limits.
         Returns (is_approved, modified_amount).
@@ -117,15 +118,26 @@ class RiskMeter:
             total_liquidity_value = total_liquidity * multiplier
             
             # Liquidity limit depends on currency
-            min_liquidity = 50000.0 if currency.upper() == "NGN" else 500.0
+            min_liquidity = 500.0 if currency.upper() == "NGN" else 500.0
             
             if total_liquidity_value < min_liquidity:
                 logger.error(f"Order rejected: Market is too illiquid. Total resting volume: {total_liquidity_value:.2f} {currency} (required: {min_liquidity} {currency})")
                 return False, 0.0
 
             if order_type.upper() == "LIMIT":
-                # Simulate execution to check price slippage
-                side_key = "asks" if side.upper() == "BUY" else "bids"
+                # Determine if we are dealing with YES or NO outcome
+                is_yes = (outcome_yes_id is None) or (outcome_id == outcome_yes_id)
+                
+                # In a unified YES orderbook:
+                # - Buying YES matches against YES asks. Execution price = rest_price.
+                # - Buying NO matches against YES bids. Execution price = 1.0 - rest_price.
+                # - Selling YES matches against YES bids. Execution price = rest_price.
+                # - Selling NO matches against YES asks. Execution price = 1.0 - rest_price.
+                if is_yes:
+                    side_key = "asks" if side.upper() == "BUY" else "bids"
+                else:
+                    side_key = "bids" if side.upper() == "BUY" else "asks"
+                    
                 resting_orders = sorted(book[side_key].items(), key=lambda x: x[0], reverse=(side_key == "bids"))
                 
                 accumulated_size = 0.0
@@ -134,7 +146,9 @@ class RiskMeter:
                 
                 for rest_price, rest_size in resting_orders:
                     take_size = min(rest_size, needed_shares - accumulated_size)
-                    average_price += take_size * rest_price
+                    
+                    execution_price = rest_price if is_yes else (1.0 - rest_price)
+                    average_price += take_size * execution_price
                     accumulated_size += take_size
                     if accumulated_size >= needed_shares:
                         break
@@ -144,6 +158,9 @@ class RiskMeter:
                     # Normalize input price to match order book scale
                     norm_price = price / multiplier
                     slippage = abs(avg_execution_price - norm_price) / norm_price
+                    logger.info(f"[DEBUG SLIPPAGE] side={side}, is_yes={is_yes}, side_key={side_key}, price={price}, norm_price={norm_price}, needed_shares={needed_shares}")
+                    logger.info(f"[DEBUG SLIPPAGE] resting_orders={resting_orders[:10]}")
+                    logger.info(f"[DEBUG SLIPPAGE] accumulated_size={accumulated_size}, average_price={average_price}, avg_execution_price={avg_execution_price}, slippage={slippage:.2%}")
                     if slippage > config.DEFAULT_SLIPPAGE:
                         logger.error(f"Order rejected: Simulated slippage of {slippage:.2%} exceeds limit of {config.DEFAULT_SLIPPAGE:.2%}")
                         return False, 0.0

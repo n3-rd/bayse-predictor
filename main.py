@@ -403,7 +403,8 @@ class BaysePredictorBot:
                             amount=sig["amount"],
                             price=sig["price"],
                             order_type=sig["type"],
-                            currency=currency
+                            currency=currency,
+                            outcome_yes_id=outcome_yes_id
                         )
                         
                         if approved:
@@ -495,8 +496,8 @@ class BaysePredictorBot:
                         # Trade has resolved! Fetch spot price at resolution time from database
                         query = """
                             SELECT spot_price FROM evaluations
-                            WHERE asset = $1 AND timestamp >= $2 - interval '2 minutes' AND timestamp <= $2 + interval '2 minutes'
-                            ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - $2))) ASC
+                            WHERE asset = $1 AND timestamp >= $2::timestamptz - interval '2 minutes' AND timestamp <= $2::timestamptz + interval '2 minutes'
+                            ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - $2::timestamptz))) ASC
                             LIMIT 1
                         """
                         spot_price = None
