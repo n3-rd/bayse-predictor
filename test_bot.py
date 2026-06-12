@@ -112,5 +112,83 @@ class TestBayseBot(unittest.TestCase):
         self.assertEqual(model, "Black-Scholes (Normal CDF)")
         self.assertAlmostEqual(prob, 0.5, places=1)
 
+    def test_copy_trader_filtration_and_latency(self):
+        import asyncio
+        import time
+        from copy_strategy import BayseCopyTrader
+        
+        # Mock dependencies
+        class MockExecutionLayer:
+            def __init__(self):
+                self.dry_run = True
+                self.orders = []
+            async def create_order(self, **kwargs):
+                self.orders.append(kwargs)
+                return {"status": "success", "orderId": "sim-123"}
+            async def request(self, *args, **kwargs):
+                return {"assets": [{"currency": "NGN", "balance": 10000.0, "available": 10000.0}]}
+                
+        class MockObserver:
+            def __init__(self):
+                self.positions = {}
+                self.orderbooks = {}
+                
+        class MockRiskMeter:
+            def __init__(self):
+                self.starting_daily_equity = 10000.0
+            async def audit_order(self, **kwargs):
+                return True, kwargs.get("amount")
+
+        exec_layer = MockExecutionLayer()
+        observer = MockObserver()
+        risk_meter = MockRiskMeter()
+        
+        copy_trader = BayseCopyTrader(exec_layer, observer, risk_meter)
+        
+        # Test 1: Non-target trader should be ignored
+        event_ignored = {
+            "userId": "some-other-user",
+            "eventId": "event-1",
+            "marketId": "market-1",
+            "outcomeId": "yes-1",
+            "side": "BUY",
+            "price": 0.5,
+            "amount": 100.0,
+            "timestamp": time.time()
+        }
+        asyncio.run(copy_trader.process_public_trade(event_ignored))
+        self.assertEqual(len(exec_layer.orders), 0)
+        
+        # Test 2: Target trader with high latency should be ignored
+        event_latency = {
+            "userId": "target-user-uuid-1",
+            "eventId": "event-1",
+            "marketId": "market-1",
+            "outcomeId": "yes-1",
+            "side": "BUY",
+            "price": 0.5,
+            "amount": 100.0,
+            "timestamp": time.time() - 5.0 # 5 seconds delay
+        }
+        asyncio.run(copy_trader.process_public_trade(event_latency))
+        self.assertEqual(len(exec_layer.orders), 0)
+        
+        # Test 3: Target trader valid trade should be copied
+        event_valid = {
+            "userId": "target-user-uuid-1",
+            "eventId": "event-1",
+            "marketId": "market-1",
+            "outcomeId": "yes-1",
+            "side": "BUY",
+            "price": 0.5,
+            "amount": 100.0,
+            "timestamp": time.time()
+        }
+        asyncio.run(copy_trader.process_public_trade(event_valid))
+        self.assertEqual(len(exec_layer.orders), 1)
+        self.assertEqual(exec_layer.orders[0]["time_in_force"], "FAK")
+        self.assertEqual(exec_layer.orders[0]["outcome_id"], "yes-1")
+
 if __name__ == "__main__":
     unittest.main()
+

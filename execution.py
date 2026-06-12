@@ -104,7 +104,7 @@ class ExecutionLayer:
     async def create_order(self, event_id: str, market_id: str, outcome_id: str, side: str, 
                            amount: float, price: Optional[float] = None, order_type: str = "LIMIT",
                            stp_mode: str = "CANCEL_OLDEST", max_slippage: Optional[float] = None, 
-                           post_only: bool = False, currency: str = "NGN") -> Dict[str, Any]:
+                           post_only: bool = False, currency: str = "NGN", time_in_force: Optional[str] = None) -> Dict[str, Any]:
         """
         Submits an order. Respects DRY_RUN mode.
         """
@@ -112,13 +112,15 @@ class ExecutionLayer:
         
         payload = {
             "side": side.upper(),
-            "outcomeId": outcome_id,
+            "outcome": outcome_id,
             "amount": amount,
             "currency": currency,
-            "type": order_type.upper(),
+            "orderType": order_type.upper(),
             "stpMode": stp_mode
         }
         
+        if time_in_force is not None:
+            payload["timeInForce"] = time_in_force.upper()
         if price is not None:
             # The API always expects normalized price [0.01, 0.99]
             multiplier = 100.0 if currency == "NGN" else 1.0
