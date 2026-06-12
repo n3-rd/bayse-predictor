@@ -103,6 +103,43 @@ async function pollStatus() {
             ksBadge.innerText = 'RISK CONTROLS OK';
         }
 
+        // Update Bot Control states
+        const pBadge = document.getElementById('predictor-status-badge');
+        const pStartBtn = document.getElementById('start-predictor-btn');
+        const pStopBtn = document.getElementById('stop-predictor-btn');
+        if (data.predictor_running) {
+            pBadge.className = 'badge success';
+            pBadge.innerText = 'RUNNING';
+            pStartBtn.style.display = 'none';
+            pStopBtn.style.display = 'inline-block';
+        } else {
+            pBadge.className = 'badge secondary';
+            pBadge.innerText = 'STOPPED';
+            pStartBtn.style.display = 'inline-block';
+            pStopBtn.style.display = 'none';
+        }
+
+        const ctBadge = document.getElementById('copytrader-status-badge');
+        const ctStartBtn = document.getElementById('start-copytrader-btn');
+        const ctStopBtn = document.getElementById('stop-copytrader-btn');
+        if (data.copytrader_running) {
+            ctBadge.className = 'badge success';
+            ctBadge.innerText = 'RUNNING';
+            ctStartBtn.style.display = 'none';
+            ctStopBtn.style.display = 'inline-block';
+        } else {
+            ctBadge.className = 'badge secondary';
+            ctBadge.innerText = 'STOPPED';
+            ctStartBtn.style.display = 'inline-block';
+            ctStopBtn.style.display = 'none';
+        }
+
+        if (data.target_traders && data.target_traders.length > 0) {
+            document.getElementById('copytrader-targets').innerText = data.target_traders.join(', ');
+        } else {
+            document.getElementById('copytrader-targets').innerText = 'None';
+        }
+
         // 2. Update Metrics
         document.getElementById('avail-balance').innerText = formatCurrency(data.available_balance, data.currency);
         document.getElementById('total-equity').innerText = 'Starting Baseline: ' + formatCurrency(data.starting_equity, data.currency);
@@ -190,6 +227,35 @@ async function pollStatus() {
 // Clear Logs button event handler
 document.getElementById('clear-logs-btn').addEventListener('click', () => {
     document.getElementById('log-console').innerHTML = '';
+});
+
+// Bot Control Event Handlers
+document.getElementById('start-predictor-btn').addEventListener('click', async () => {
+    try {
+        await fetch('/api/control/predictor/start', { method: 'POST' });
+        pollStatus();
+    } catch (e) { console.error(e); }
+});
+
+document.getElementById('stop-predictor-btn').addEventListener('click', async () => {
+    try {
+        await fetch('/api/control/predictor/stop', { method: 'POST' });
+        pollStatus();
+    } catch (e) { console.error(e); }
+});
+
+document.getElementById('start-copytrader-btn').addEventListener('click', async () => {
+    try {
+        await fetch('/api/control/copytrader/start', { method: 'POST' });
+        pollStatus();
+    } catch (e) { console.error(e); }
+});
+
+document.getElementById('stop-copytrader-btn').addEventListener('click', async () => {
+    try {
+        await fetch('/api/control/copytrader/stop', { method: 'POST' });
+        pollStatus();
+    } catch (e) { console.error(e); }
 });
 
 // Start loop

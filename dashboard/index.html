@@ -27,6 +27,27 @@
             </div>
         </header>
 
+        <!-- Bot Controls Panel -->
+        <section class="controls-panel glass-card" style="margin-bottom: 1.5rem; display: flex; gap: 2rem; align-items: center; justify-content: space-between; padding: 1rem 1.5rem;">
+            <div style="display: flex; gap: 2rem; flex-wrap: wrap;">
+                <div class="control-group" style="display: flex; align-items: center; gap: 1rem;">
+                    <span style="font-weight: 600;">Prediction Bot:</span>
+                    <span id="predictor-status-badge" class="badge secondary">STOPPED</span>
+                    <button id="start-predictor-btn" class="btn success-btn" style="background: #10b981; color: white; border: none; padding: 0.4rem 1rem; border-radius: 4px; cursor: pointer; font-weight: 600; transition: background 0.2s;">Start</button>
+                    <button id="stop-predictor-btn" class="btn danger-btn" style="background: #ef4444; color: white; border: none; padding: 0.4rem 1rem; border-radius: 4px; cursor: pointer; font-weight: 600; transition: background 0.2s; display: none;">Stop</button>
+                </div>
+                <div class="control-group" style="display: flex; align-items: center; gap: 1rem;">
+                    <span style="font-weight: 600;">Copy Trading Bot:</span>
+                    <span id="copytrader-status-badge" class="badge secondary">STOPPED</span>
+                    <button id="start-copytrader-btn" class="btn success-btn" style="background: #10b981; color: white; border: none; padding: 0.4rem 1rem; border-radius: 4px; cursor: pointer; font-weight: 600; transition: background 0.2s;">Start</button>
+                    <button id="stop-copytrader-btn" class="btn danger-btn" style="background: #ef4444; color: white; border: none; padding: 0.4rem 1rem; border-radius: 4px; cursor: pointer; font-weight: 600; transition: background 0.2s; display: none;">Stop</button>
+                </div>
+            </div>
+            <div style="font-size: 0.9rem; opacity: 0.8;">
+                Targets: <span id="copytrader-targets" style="font-family: monospace;">None</span>
+            </div>
+        </section>
+
         <!-- Metric Grid -->
         <section class="metrics-grid">
             <div class="metric-card glass-card">

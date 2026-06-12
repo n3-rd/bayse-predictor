@@ -16,5 +16,5 @@ COPY . /app/
 # Make sure execution scripts are executable
 RUN chmod +x run-copy-trade.sh
 
-# Run the copy trade script
-CMD ["python", "copy_trade_runner.py"]
+# Run the unified web manager
+CMD ["python", "web_manager.py"]
