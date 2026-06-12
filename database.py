@@ -227,3 +227,20 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"Error fetching training data: {e}")
             return []
+
+    async def has_recent_trade(self, market_id: str, outcome_id: str, minutes_limit: int = 15) -> bool:
+        if not self.pool:
+            return False
+        try:
+            query = """
+                SELECT EXISTS (
+                    SELECT 1 FROM trades
+                    WHERE market_id = $1 AND outcome_id = $2
+                      AND (is_resolved = FALSE OR timestamp >= CURRENT_TIMESTAMP - $3 * interval '1 minute')
+                )
+            """
+            async with self.pool.acquire() as conn:
+                return await conn.fetchval(query, market_id, outcome_id, minutes_limit)
+        except Exception as e:
+            logger.error(f"Error checking recent trades in database: {e}")
+            return False

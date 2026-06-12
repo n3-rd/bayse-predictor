@@ -71,11 +71,43 @@ class RiskMeter:
             logger.error("Order rejected: Global Daily Loss Kill Switch was just triggered!")
             return False, 0.0
 
+        # 1.5 Enforce 30% Max Total Portfolio Allocation Limit
+        total_balance = self.starting_daily_equity
+        available_balance = self.starting_daily_equity
+        
+        try:
+            assets_data = await self.exec_layer.request("GET", "/v1/wallet/assets", authenticated=True)
+            for asset in assets_data.get("assets", []):
+                symbol = (asset.get("symbol") or asset.get("currency", "")).upper()
+                if symbol == currency.upper():
+                    total_balance = float(asset.get("balance", asset.get("total", 0.0)))
+                    available_balance = float(asset.get("availableBalance", asset.get("available", 0.0)))
+                    break
+        except Exception:
+            if self.exec_layer.dry_run:
+                open_orders_val = sum(o.get("amount", 0.0) for o in self.exec_layer.dry_run_orders.values() if o.get("status") == "OPEN")
+                positions_val = sum(pos_qty * 50.0 for pos_qty in self.observer.positions.values())
+                allocated_balance = open_orders_val + positions_val
+                available_balance = total_balance - allocated_balance
+        
+        allocated_balance = total_balance - available_balance
+        max_total_allocation = total_balance * getattr(config, "MAX_TOTAL_ALLOCATION_PCT", 0.30)
+        
+        audited_amount = amount
+        if allocated_balance + audited_amount > max_total_allocation:
+            allowed_amount = max_total_allocation - allocated_balance
+            min_limit = 100.0 if currency.upper() == "NGN" else 1.0
+            if allowed_amount < min_limit:
+                logger.error(f"Order rejected: Total allocated balance ({allocated_balance:.2f}) + order amount ({audited_amount:.2f}) exceeds the {getattr(config, 'MAX_TOTAL_ALLOCATION_PCT', 0.30):.0%} limit ({max_total_allocation:.2f}). No room for new trades.")
+                return False, 0.0
+            else:
+                logger.warning(f"Order amount truncated from {audited_amount:.2f} to {allowed_amount:.2f} to satisfy total portfolio allocation limit ({max_total_allocation:.2f}).")
+                audited_amount = allowed_amount
+
         # 2. Enforce 2% Max Position Sizing
         max_risk = self.starting_daily_equity * config.MAX_POSITION_SIZE_PCT
-        audited_amount = amount
-        if amount > max_risk:
-            logger.warning(f"Order size {amount} exceeds 2% max risk limit ({max_risk}). Truncating to limit.")
+        if audited_amount > max_risk:
+            logger.warning(f"Order size {audited_amount} exceeds 2% max risk limit ({max_risk}). Truncating to limit.")
             audited_amount = max_risk
             
         # Ensure minimum constraints (e.g. 100 NGN or 1.00 USD)

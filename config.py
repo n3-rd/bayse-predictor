@@ -35,8 +35,10 @@ DAILY_LOSS_LIMIT_PCT = 0.05   # Global daily loss limit of 5%
 
 # Copy Trading settings
 TARGET_TRADERS = ["@zorodelavega", "@habibti", "@jimmycooks"]
-COPY_TRADE_MAX_ALLOCATION_PCT = 0.02  # Restrict to maximum 2% per copy event
+COPY_TRADE_MAX_ALLOCATION_PCT = 0.30  # Restrict to maximum 30% per copy event
 MAX_COPY_SLIPPAGE = 0.01             # Maximum 1% price slippage boundary for following copies
+MAX_TOTAL_ALLOCATION_PCT = 0.30      # Limit total allocated balance to 30% at any time
+
 
 
 # Strategy settings

@@ -113,8 +113,10 @@ class ExecutionLayer:
         payload = {
             "side": side.upper(),
             "outcome": outcome_id,
+            "outcomeId": outcome_id,
             "amount": amount,
             "currency": currency,
+            "type": order_type.upper(),
             "orderType": order_type.upper(),
             "stpMode": stp_mode
         }

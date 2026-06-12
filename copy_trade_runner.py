@@ -31,8 +31,9 @@ async def resolve_target_trader(session, username_tag: str) -> str:
     clean_tag = username_tag.lstrip('@')
     
     url = f"{config.BASE_REST_URL}/v1/user/lookup?username={clean_tag}"
+    headers = {"X-Public-Key": config.BAYSE_PUBLIC_KEY}
     logger.info(f"Resolving trader username tag '{username_tag}' via URL: {url}")
-    async with session.get(url) as resp:
+    async with session.get(url, headers=headers) as resp:
         if resp.status == 200:
             user_profile = await resp.json()
             # Extract the raw permanent UUID
@@ -42,13 +43,16 @@ async def resolve_target_trader(session, username_tag: str) -> str:
                 return resolved_id
     raise ValueError(f"Could not resolve target user tag: {username_tag}")
 
+from database import DatabaseManager
+
 class CopyTradeRunner:
-    def __init__(self):
+    def __init__(self, db_manager=None):
+        self.db = db_manager or DatabaseManager()
         self.exec_layer = ExecutionLayer(BAYSE_PUBLIC_KEY, BAYSE_SECRET_KEY, dry_run=DRY_RUN)
         self.observer = MarketObserver(self.exec_layer, BAYSE_PUBLIC_KEY)
         self.exec_layer.observer = self.observer
         self.risk_meter = RiskMeter(self.exec_layer, self.observer)
-        self.copy_trader = BayseCopyTrader(self.exec_layer, self.observer, self.risk_meter)
+        self.copy_trader = BayseCopyTrader(self.exec_layer, self.observer, self.risk_meter, self.db)
         
         self.is_running = False
         self.tasks = []
@@ -57,6 +61,9 @@ class CopyTradeRunner:
     async def start(self):
         logger.info("Initializing Copy Trade Runner...")
         self.is_running = True
+        
+        # Initialize Database Manager
+        await self.db.initialize()
         
         # 1. Initialize execution layer & risk meter
         await self.exec_layer.initialize()
@@ -104,6 +111,7 @@ class CopyTradeRunner:
             task.cancel()
             
         await self.exec_layer.close()
+        await self.db.close()
         logger.info("Copy Trade Runner stopped successfully.")
 
     async def _websocket_consumer_loop(self):

@@ -92,6 +92,18 @@ async function pollStatus() {
             dryRunBadge.className = 'badge live';
             dryRunBadge.innerText = 'LIVE TRADING';
         }
+
+        // ML Model badge
+        const mlBadge = document.getElementById('ml-model-badge');
+        if (data.ml_status) {
+            if (data.ml_status.is_trained) {
+                mlBadge.className = 'badge success';
+                mlBadge.innerText = 'ML: ' + data.ml_status.model_type.replace('Classifier', '');
+            } else {
+                mlBadge.className = 'badge secondary';
+                mlBadge.innerText = 'ML: COLD-STARTING';
+            }
+        }
         
         // Kill Switch status
         const ksBadge = document.getElementById('kill-switch-badge');

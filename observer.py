@@ -132,7 +132,9 @@ class MarketObserver:
                 portfolio_data = await self.exec_layer.request("GET", "/v1/pm/portfolio", authenticated=True)
                 self.portfolio = portfolio_data
                 for pos in portfolio_data.get("outcomeBalances", []):
-                    self.positions[pos["outcomeId"]] = float(pos.get("balance", 0.0))
+                    o_id = pos.get("outcomeId") or pos.get("outcome")
+                    if o_id:
+                        self.positions[o_id] = float(pos.get("balance", 0.0))
             except Exception as e:
                 logger.warning(f"Failed to fetch portfolio during sync: {e}. Starting with empty positions.")
                 
@@ -204,8 +206,8 @@ class MarketObserver:
                     self._apply_orderbook_update(market_id, msg)
                 elif event_type == "order_updated":
                     # Private orders stream
-                    outcome_id = msg.get("outcomeId")
-                    balance_change = float(msg.get("filledQtyDelta", 0.0))
+                    outcome_id = msg.get("outcomeId") or msg.get("outcome")
+                    balance_change = float(msg.get("filledQtyDelta", 0.0) or msg.get("filledQty", 0.0) or msg.get("qty", 0.0))
                     if outcome_id:
                         self.positions[outcome_id] = self.positions.get(outcome_id, 0.0) + balance_change
                     

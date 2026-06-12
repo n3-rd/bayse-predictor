@@ -378,6 +378,12 @@ class BaysePredictorBot:
                     for sig in signals:
                         outcome_id = sig["outcomeId"]
                         
+                        # PREVENT BALANCE DRAIN: Check if we have an active or recent trade in the database
+                        has_db_trade = await self.db.has_recent_trade(sig['marketId'], outcome_id)
+                        if has_db_trade:
+                            logger.info(f"Skipping {sig['side']} for {outcome_id}: Active or recent trade exists in database.")
+                            continue
+
                         # PREVENT BALANCE DRAIN: Check if we already hold a position here
                         current_position = self.observer.positions.get(outcome_id, 0.0)
                         if current_position > 0:
@@ -386,9 +392,9 @@ class BaysePredictorBot:
 
                         # PREVENT BALANCE DRAIN: Check if we already have an open order for this outcome
                         if self.exec_layer.dry_run:
-                            has_open_order = any(o.get("outcomeId") == outcome_id and o.get("status") == "OPEN" for o in self.exec_layer.dry_run_orders.values())
+                            has_open_order = any((o.get("outcomeId") == outcome_id or o.get("outcome") == outcome_id) and o.get("status") == "OPEN" for o in self.exec_layer.dry_run_orders.values())
                         else:
-                            has_open_order = any(o.get("outcomeId") == outcome_id for o in self.observer.open_orders.values())
+                            has_open_order = any(o.get("outcomeId") == outcome_id or o.get("outcome") == outcome_id for o in self.observer.open_orders.values())
                             
                         if has_open_order:
                             logger.info(f"Skipping {sig['side']} for {outcome_id}: Already have an open order on the book.")
@@ -635,7 +641,11 @@ class BaysePredictorBot:
             "active_markets_count": len(self.latest_evaluations),
             "positions_held_count": positions_held_count,
             "evaluations": sorted_evals,
-            "logs": logs
+            "logs": logs,
+            "ml_status": {
+                "is_trained": self.ml.is_trained,
+                "model_type": type(self.ml.model).__name__ if self.ml.is_trained and self.ml.model else "None (Black-Scholes Fallback)"
+            }
         }
 
 

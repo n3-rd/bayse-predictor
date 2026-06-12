@@ -16,7 +16,7 @@ logger = logging.getLogger("BayseBot.WebManager")
 class WebManager:
     def __init__(self):
         self.predictor_bot = BaysePredictorBot()
-        self.copy_trade_runner = CopyTradeRunner()
+        self.copy_trade_runner = CopyTradeRunner(db_manager=self.predictor_bot.db)
         self.port = config.DASHBOARD_PORT
         self.runner = None
         self.site = None
@@ -106,12 +106,14 @@ class WebManager:
             logger.error(f"Error handling status request: {e}")
             return web.json_response({"error": str(e)}, status=500)
 
+import signal
+
 async def main():
     manager = WebManager()
     
     # Handle OS signals
     loop = asyncio.get_running_loop()
-    for sig in (asyncio.subprocess.signal.SIGINT, asyncio.subprocess.signal.SIGTERM):
+    for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda: asyncio.create_task(manager.stop_server()))
         
     await manager.start_server()

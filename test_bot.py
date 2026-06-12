@@ -193,8 +193,70 @@ class TestBayseBot(unittest.TestCase):
             self.assertEqual(len(exec_layer.orders), 1)
             self.assertEqual(exec_layer.orders[0]["time_in_force"], "FAK")
             self.assertEqual(exec_layer.orders[0]["outcome_id"], "yes-1")
+
+            # Test 4: Re-submitting the exact same event should be ignored (de-duplication)
+            exec_layer.orders.clear()
+            asyncio.run(copy_trader.process_public_trade(event_valid))
+            self.assertEqual(len(exec_layer.orders), 0)
+
+            # Test 5: Try copying a new event with outcome already held in positions
+            observer.positions["yes-1"] = 50.0
+            event_new = {
+                "id": "new-execution-id",
+                "userId": "target-user-uuid-1",
+                "eventId": "event-1",
+                "marketId": "market-1",
+                "outcomeId": "yes-1",
+                "side": "BUY",
+                "price": 0.5,
+                "amount": 100.0,
+                "timestamp": time.time()
+            }
+            asyncio.run(copy_trader.process_public_trade(event_new))
+            self.assertEqual(len(exec_layer.orders), 0)
         finally:
             config.TARGET_TRADERS = old_traders
+
+    def test_risk_meter_portfolio_allocation_limit(self):
+        import asyncio
+        from risk import RiskMeter
+        
+        class MockExecutionLayer:
+            def __init__(self):
+                self.dry_run = False
+            async def request(self, method, path, **kwargs):
+                # Mock NGN wallet with 10,000 NGN balance, but only 6,500 available (3,500 allocated, which is 35%)
+                return {"assets": [{"currency": "NGN", "balance": 10000.0, "availableBalance": 6500.0}]}
+
+        class MockObserver:
+            def __init__(self):
+                self.positions = {}
+                self.orderbooks = {}
+
+        exec_layer = MockExecutionLayer()
+        observer = MockObserver()
+        risk_meter = RiskMeter(exec_layer, observer)
+        risk_meter.starting_daily_equity = 10000.0
+        
+        # Test: Placing another trade when 35% is already allocated should trigger rejection
+        approved, amount = asyncio.run(risk_meter.audit_order(
+            event_id="e1", market_id="m1", outcome_id="o1", side="BUY",
+            amount=500.0, price=0.5, currency="NGN"
+        ))
+        self.assertFalse(approved)
+        self.assertEqual(amount, 0.0)
+
+        # Test: If only 1,000 is allocated (10%), we should be able to allocate more (e.g. 500 NGN)
+        async def request_low_allocation(method, path, **kwargs):
+            return {"assets": [{"currency": "NGN", "balance": 10000.0, "availableBalance": 9000.0}]}
+        exec_layer.request = request_low_allocation
+
+        approved, amount = asyncio.run(risk_meter.audit_order(
+            event_id="e1", market_id="m1", outcome_id="o1", side="BUY",
+            amount=500.0, price=0.5, currency="NGN"
+        ))
+        self.assertTrue(approved)
+        self.assertEqual(amount, 200.0) # Truncated to 2% max position limit (2% of starting daily equity baseline, which is 200.0 NGN)
 
 if __name__ == "__main__":
     unittest.main()

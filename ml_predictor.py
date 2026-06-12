@@ -117,7 +117,12 @@ class BitcoinMLPredictor:
             async with db_manager.pool.acquire() as conn:
                 price_rows = await conn.fetch(eval_query)
             
-            prices_df = pd.DataFrame(price_rows)
+            if price_rows:
+                prices_df = pd.DataFrame([dict(r) for r in price_rows])
+                prices_df["spot_price"] = prices_df["spot_price"].astype(float)
+            else:
+                prices_df = pd.DataFrame(columns=["timestamp", "spot_price"])
+                
             prices_df["timestamp"] = pd.to_datetime(prices_df["timestamp"])
             
             for row in valid_rows:
